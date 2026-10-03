@@ -13,10 +13,44 @@ Build and test your three tools in `tools.py` first. Then come here.
     python agent.py          runs both example paths below
 """
 
+import re
+
 import config
 import trace
 from tools import search_listings, suggest_outfit, create_fit_card
 from generate import ModelUnavailable
+
+# ── query parsing ───────────────────────────────────────────────────────────
+#
+# Regex, not the model — a query like "90s track jacket in size M" has its
+# size and price sitting in predictable, literal phrases ("size X", "under
+# $X"), so there's nothing for a model call to disambiguate. Spending an API
+# call (and the rate-limit budget that comes with it) to parse something this
+# mechanical would be solving the wrong problem.
+
+_SIZE_RE = re.compile(r"\bsize\s+([A-Za-z0-9.]+)\b", re.IGNORECASE)
+_PRICE_RE = re.compile(r"under\s*\$?\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def parse_query(query: str) -> dict:
+    """
+    Pull a description, a size, and a max_price out of a plain-language query.
+
+    Returns {"description": str, "size": str | None, "max_price": float | None}.
+    Whatever isn't matched by the size/price patterns becomes the description,
+    fed to search_listings for keyword scoring.
+    """
+    size_match = _SIZE_RE.search(query)
+    size = size_match.group(1) if size_match else None
+
+    price_match = _PRICE_RE.search(query)
+    max_price = float(price_match.group(1)) if price_match else None
+
+    description = _SIZE_RE.sub("", query)
+    description = _PRICE_RE.sub("", description)
+    description = re.sub(r"\s+", " ", description).strip(" ,")
+
+    return {"description": description, "size": size, "max_price": max_price}
 
 
 # ── session state ─────────────────────────────────────────────────────────────
@@ -106,9 +140,58 @@ def run_agent(query: str, wardrobe: dict) -> dict:
         than a stack trace. The import is already at the top of this file.
     """
     session = new_session(query, wardrobe)
+    iterations = 0
 
-    # TODO: delete these two lines and build the loop.
-    session["error"] = "The planning loop isn't built yet — see the TODO in agent.py."
+    # Step 1: parse the query, then search.
+    iterations += 1
+    trace.check_iterations(iterations)
+
+    parsed = parse_query(query)
+    session["parsed"] = parsed
+
+    results = search_listings(
+        parsed["description"], size=parsed["size"], max_price=parsed["max_price"]
+    )
+    session["search_results"] = results
+
+    # ⚠️ THE BRANCH. Nothing came back -> stop here, name what to change, and
+    # never call suggest_outfit with an empty selection.
+    if not results:
+        constraints = []
+        if parsed["size"]:
+            constraints.append(f"size {parsed['size']}")
+        if parsed["max_price"] is not None:
+            constraints.append(f"under ${parsed['max_price']:.0f}")
+        described = parsed["description"] or query
+        where = f" in {' and '.join(constraints)}" if constraints else ""
+
+        suggestions = ["different keywords"]
+        if parsed["size"]:
+            suggestions.append("a different size")
+        if parsed["max_price"] is not None:
+            suggestions.append("a higher price ceiling")
+
+        session["error"] = (
+            f"No listings matched '{described}'{where}. "
+            f"Try {' or '.join(suggestions)}."
+        )
+        return session
+
+    # Step 2: pick an item, suggest an outfit.
+    iterations += 1
+    trace.check_iterations(iterations)
+
+    session["selected_item"] = results[0]
+    session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+
+    # Step 3: write the caption.
+    iterations += 1
+    trace.check_iterations(iterations)
+
+    session["fit_card"] = create_fit_card(
+        session["outfit_suggestion"], session["selected_item"]
+    )
+
     return session
 
 
