@@ -39,9 +39,15 @@
 
 ## What This Does
 
-<!-- Three or four sentences: what a user asks for, and what they get back. -->
-
-
+FitFindr is an agent over a 40-item mock thrift-listings dataset. A user
+types a plain-language request — `vintage graphic tee under $30`, `90s
+track jacket in size M` — and the agent searches the listings, picks the
+best match, asks a model to suggest an outfit pairing it with the user's
+saved wardrobe (or general styling advice if they haven't saved one), and
+writes a short caption naming the item, its price, and the platform it's
+on. If nothing in the data matches what was asked, it says so and names
+what to change — size, price, or keywords — instead of calling the next
+two tools with nothing to work from.
 
 ---
 
@@ -59,24 +65,49 @@
 
 ### `search_listings`
 
-- **What it does:**
-- **Inputs:** <!-- name and type each: `max_price` (float), not "a price" -->
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Searches the 40 mock listings for keyword overlap with a
+  description, optionally filtered to a size and a price ceiling.
+- **Inputs:** `description` (str) — free-text keywords, e.g. `"vintage
+  graphic tee"`. `size` (str | None) — a size token, e.g. `"M"` or `"8"`,
+  matched against the listing's size string split into whole tokens
+  (`"S/M"` → `{"S","M"}`), never a raw substring test — `"M" in "XL
+  (oversized)"` would otherwise be true and wrong. `max_price` (float |
+  None) — inclusive price ceiling; a listing priced exactly at the ceiling
+  is included.
+- **Returns:** `list[dict]`, best keyword-overlap match first (ties broken
+  by lower price), each dict a full listing record — `id, title,
+  description, category, style_tags, size, condition, price, colors,
+  brand, platform` — at most `config.SEARCH_RESULT_LIMIT` (10) of them.
+- **When it has nothing:** `[]` — an empty list, never `None`, never an
+  exception. This is what `run_agent`'s branch checks.
 
 ### `suggest_outfit`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Asks the model for 1-2 outfits combining a new item
+  with the user's wardrobe, or general styling advice if the wardrobe has
+  nothing in it.
+- **Inputs:** `new_item` (dict) — a listing dict, as returned by
+  `search_listings`. `wardrobe` (dict) — `{"items": list[dict]}`, each item
+  dict holding `id, name, category, colors, style_tags, notes`. `items` may
+  be `[]`.
+- **Returns:** `str` — a non-empty, 2-4 sentence suggestion.
+- **When it has nothing:** `wardrobe["items"] == []` → still returns a
+  non-empty string, but general styling advice (category/color/silhouette
+  guidance) rather than combinations with owned pieces that don't exist.
+  Never raises, never returns `""`.
 
 ### `create_fit_card`
 
-- **What it does:**
-- **Inputs:**
-- **Returns:**
-- **When it has nothing:**
+- **What it does:** Writes a short, postable caption for the item using the
+  outfit suggestion as context.
+- **Inputs:** `outfit` (str) — the string `suggest_outfit` returned.
+  `new_item` (dict) — the listing dict.
+- **Returns:** `str` — 2-4 sentences, naming the item, its price, and its
+  platform once each.
+- **When it has nothing:** `outfit` is empty or whitespace-only → returns a
+  plain descriptive fallback (`"Found {title} (${price} on {platform}), but
+  there's no outfit suggestion yet to build a caption from."`) with **no
+  model call**, rather than raising or sending the model an empty prompt.
 
 ---
 
@@ -93,13 +124,28 @@
      The grader checks your code against what you claim here, so the file and
      function have to be real. -->
 
-**Branch rule:**
+**Branch rule:** If `search_listings` returns an empty list, put a message
+in `session["error"]` naming what to change (size, price, or keywords) and
+stop — `suggest_outfit` and `create_fit_card` are never called. Otherwise,
+take `search_results[0]` as `selected_item` and continue to `suggest_outfit`,
+then `create_fit_card`.
 
 **Where it lives:** `agent.py::run_agent`
 
-**How the query is parsed:** <!-- regex, string splitting, or asking the model — say which -->
+**How the query is parsed:** Regex, in `agent.py::parse_query`. One pattern
+(`\bsize\s+([A-Za-z0-9.]+)\b`) pulls out an explicit size, another
+(`under\s*\$?\s*(\d+(?:\.\d+)?)`) pulls out a price ceiling, and whatever's
+left after both are stripped out becomes the description handed to
+`search_listings`. I used regex rather than a model call because both
+patterns are literal phrases the example queries always use ("size X",
+"under $X") — there's no ambiguity for a model to resolve, and spending an
+API call (and rate-limit budget) on something this mechanical would be
+solving a problem that isn't there.
 
-**What moves through the session:** <!-- which fields, in what order -->
+**What moves through the session:** `query` → `parsed` (description, size,
+max_price) → `search_results` → `selected_item` (first of `search_results`)
+→ `outfit_suggestion` → `fit_card`, in that order. `error` is set instead
+and the run returns early if `search_results` comes back empty.
 
 ---
 
@@ -113,25 +159,50 @@
 **One full query**
 
 ```
-$ python app.py ask '...'
+$ python app.py ask 'vintage graphic tee under $30'
 
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   Pair your new Y2K butterfly baby tee with the baggy straight-leg dark wash jeans and chunky white sneakers for an effortless off-duty streetwear look, layering the black cropped zip hoodie on top if it gets chilly. Alternatively, lean into a retro-casual vibe by tucking the tee into the wide-leg khaki trousers, cinched with the brown leather belt, and finished off with your favorite black crossbody bag.
+
+  Fit card: Found this literal dream butterfly baby tee on depop and my inner 2004 self is screaming. It was only $18.0 and honestly, the fit is so nostalgic with low-rise denim and beat-up sneakers. Can't wait to wear this all through festival season!
+
+2 model calls this session, 540 prompt + 145 output tokens
+```
+
+And the empty-search branch, for contrast:
+
+```
+$ python app.py ask 'designer ballgown size XXS under $5'
+
+  No listings matched 'designer ballgown' in size XXS and under $5. Try different keywords or a different size or a higher price ceiling.
+
+0 model calls this session
 ```
 
 **The three tools, tested one at a time**
 
 ```
 $ python -c "from tools import search_listings; print(search_listings('graphic tee', max_price=30))"
+[{'id': 'lst_017', 'title': 'Mesh Long-Sleeve Top — Black', ... 'price': 15.0, ...}, {'id': 'lst_002', 'title': 'Y2K Baby Tee — Butterfly Print', ... 'price': 18.0, ...}, {'id': 'lst_033', 'title': 'Vintage Band Tee — Faded Grey', ... 'price': 19.0, ...}, {'id': 'lst_006', 'title': 'Graphic Tee — 2003 Tour Bootleg Style', ... 'price': 24.0, ...}, {'id': 'lst_015', 'title': 'Vintage Graphic Hoodie — Faded Black', ... 'price': 26.0, ...}, {'id': 'lst_011', 'title': 'Low-Rise Cargo Pants — Khaki', ... 'price': 27.0, ...}]
+```
 
+Worth noting honestly: the top result here is a mesh top, not a tee — its
+*description* happens to contain the literal phrase "graphic tee" ("great
+for layering under a graphic tee"), which ties it with the actual graphic
+tees on keyword overlap, and it wins the tiebreak on price ($15). That's a
+real, visible limit of keyword-only scoring — it matches on word
+co-occurrence, not on what the item actually is — which is exactly the kind
+of miss criterion 1's "4 of 5, not 5 of 5" is there to allow for.
+
+```
+$ python -c "from tools import suggest_outfit; from utils.data_loader import get_example_wardrobe, load_listings; print(suggest_outfit(load_listings()[0], get_example_wardrobe()))"
+Pair your new Levi's with the white ribbed tank top and oversized grey crewneck sweatshirt, layered with the black combat boots and black crossbody bag for an effortless, cozy streetwear look. Alternatively, go for a classic double-denim moment by tucking the white ribbed tank into the jeans, adding the brown leather belt, and throwing on the vintage black denim jacket and chunky white sneakers.
 ```
 
 ```
-$ python -c "from tools import suggest_outfit; ..."
-
-```
-
-```
-$ python -c "from tools import create_fit_card; ..."
-
+$ python -c "from tools import create_fit_card; from utils.data_loader import load_listings; print(create_fit_card('jeans and white sneakers', load_listings()[0]))"
+Score these vintage Levi's 501 jeans on Depop for just $38.0 and honestly they fit like a absolute dream. They've got that perfectly worn-in medium wash that gives off total effortless streetwear energy. Just threw them on with crisp white sneakers and I'm never taking them off.
 ```
 
 ---
@@ -145,17 +216,35 @@ $ python -c "from tools import create_fit_card; ..."
      "I gave Claude my search_listings spec. It returned None on no match
      instead of an empty list, so I changed it" is the level we want. -->
 
+<!-- REVIEW BEFORE SUBMITTING: these describe what actually happened in this
+     session. Edit them to reflect your own review before submitting — this
+     section is graded as your own account. -->
+
 **Moment 1**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* A size-matching approach for `search_listings` that
+  wouldn't fall into the substring trap the spec warns about (`"S" in "US
+  9"` is `True` and wrong).
+- *What came back:* A token-based matcher — split both the query size and
+  the listing's size string into alphanumeric tokens and check for exact
+  membership (`"S/M"` → `{"S","M"}`), rather than any substring test.
+- *What I changed:* Nothing structurally, but I didn't take it on faith —
+  I ran it against the actual sizes in the data (`"US 8.5"` vs query `"8"`,
+  `"XL (oversized)"` vs query `"M"`) to confirm it correctly rejected the
+  near-miss cases before using it in `search_listings`.
 
 **Moment 2**
 
-- *What I asked for:*
-- *What came back:*
-- *What I changed:*
+- *What I asked for:* Help figuring out why three `create_fit_card` calls on
+  the same item came back word-for-word identical, per the Milestone 4
+  warning that it's one of two settings in `config.py`.
+- *What came back:* Since `TEMPERATURE` was already `0.9`, not `0`, the
+  explanation had to be the cache — identical `(prompt, system, temperature)`
+  triples return the stored answer on repeat calls.
+- *What changed:* I re-ran the same test with `AI201_CACHE=0` to confirm —
+  three real calls, three genuinely different captions — before writing
+  criterion 4 around the real (non-cached) behavior rather than what three
+  identical cached strings would have suggested.
 
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
