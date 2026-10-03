@@ -24,10 +24,16 @@ data earns credit; *"80% seemed reasonable"* does not.
 Given a query that matches at least one listing, the agent completes all three
 tool calls and returns a fit card — in at least 4 of 5 tries.
 
-**Why this target:**
-<!-- Why 4 of 5 and not 5 of 5? Something about your search, probably —
-     "my search is a plain keyword match and some phrasings will miss" is a
-     real answer. -->
+**Why this target:** `search_listings` is a plain keyword-overlap match
+against title, description, category, style_tags, colors, and brand — it has
+no sense of synonyms. "Office-appropriate jacket" won't score any overlap
+against `lst_018`'s actual tags (vintage, classic, linen, cottagecore,
+minimal) even though a human would call a linen blazer office-appropriate.
+On the five phrasings I actually tried (matching the exact or near-exact
+wording of real listings) all five completed cleanly, but I'm leaving one of
+five as slack for a phrasing that shares no vocabulary with anything in a
+40-listing corpus — a keyword matcher's genuine failure mode, not a made-up
+one.
 
 ---
 
@@ -36,67 +42,76 @@ tool calls and returns a fit card — in at least 4 of 5 tries.
 Given a query that matches no listings, the agent stops before calling
 `suggest_outfit` and returns a message naming what to change — 5 of 5 tries.
 
-**Why this target:**
-<!-- Why is 5 of 5 reasonable here when criterion 1 isn't? What's different
-     about this path? -->
+**Why this target:** Unlike criterion 1, nothing here depends on the model
+or on keyword luck — it's a plain `if not results:` branch in
+`agent.py::run_agent` over whatever `search_listings` returned. Either the
+code checks the list before calling the next tool or it doesn't; there's no
+in-between result that would make 4 of 5 the honest target. I tested this
+five times against `designer ballgown size XXS under $5` (which matches
+nothing — no listing has an XXS token) and got 5 of 5 stops, zero model
+calls each time.
 
 ---
 
-## 3. Something about state
+## 3. The item search found is the same item the next tools receive
 
-<!-- YOU WRITE THIS ONE.
+For 5 different queries that match at least one listing, `session
+["selected_item"]["id"]` equals `session["search_results"][0]["id"]`
+(confirmed by comparing the two, not by assuming it), and that same id's
+title/price appear in the fit card's subject matter rather than some other
+listing's — 5 of 5 tries.
 
-     How would you know that the item your search found is the same item the
-     next tool received? Name something countable or observable.
-
-     This is the criterion people find hardest, because state failure doesn't
-     look like state failure — it looks like a tool problem. Something that
-     compares session["selected_item"] against what actually reached
-     suggest_outfit is the shape you're after. -->
-
-
-
-**Why this target:**
-
-
-
----
-
-## 4. Something about the fit card
-
-<!-- YOU WRITE THIS ONE.
-
-     The fit card calls a model, so the same input can produce different words
-     each time. That's not a bug — it's the nature of the tool. So what would
-     make it acceptable?
-
-     Think about what you'd actually be unhappy to see. A caption that never
-     mentions the price? Two different items producing the same opening
-     sentence? A card longer than a caption anyone would post? Any of those can
-     be turned into a number. -->
-
-
-
-**Why this target:**
-
-
+**Why this target:** Like criterion 2, this isn't the model's behavior to be
+unreliable about — it's Python passing one dict reference from
+`session["selected_item"]` into `suggest_outfit()` and `create_fit_card()`.
+I tested it directly rather than trusting the code: ran 5 different queries
+through `run_agent` and compared `selected_item["id"]` against
+`search_results[0]["id"]` by `is`/`==`, not by eyeballing the output, and
+got a match on all 5. A state bug here (e.g. passing the wrong index, or a
+copy that silently diverges) wouldn't look like a state bug from the
+outside — it would look like `suggest_outfit` giving advice for the wrong
+item — which is exactly why this needs its own criterion instead of folding
+into criterion 1.
 
 ---
 
-## 5. Your choice
+## 4. The fit card varies, but never drops the required facts
 
-<!-- YOU WRITE THIS ONE TOO.
+For 5 different items (cache off, so each is a real call), the 5 fit cards:
+(a) share no identical opening sentence with each other, and (b) each
+mention that item's price and platform at least once — 5 of 5 on both
+counts.
 
-     Pick something you actually care about getting right. Speed, the empty
-     wardrobe path, what happens when the model can't be reached, whether the
-     search respects a price ceiling — anything, as long as it names a number
-     or an observable outcome. -->
+**Why this target:** The wording is supposed to change run to run — that's
+`TEMPERATURE=0.9` doing its job, not noise to tolerate. What I'd actually be
+unhappy to see is the opposite failure: a template that produces the same
+opening regardless of item (which would mean the prompt isn't really using
+the item details), or a card that varies in style but drops the price or
+platform it's supposed to name. I tested 5 items through the real pipeline
+with caching off and got 5 distinct openings and 5/5 on mentioning both
+price and platform, so 5 of 5 is what the system actually does, not an
+aspirational number — if I see a collapsed template or a missing price next
+unit, that's a real regression, not noise.
 
+---
 
+## 5. The price ceiling is never violated
 
-**Why this target:**
+For 5 different queries, each with a different `max_price`, every listing
+`search_listings` returns has `price <= max_price` — 0 violations across all
+results returned, not just the first one.
 
-
+**Why this target:** Of everything the agent does, this is the one I'd be
+least willing to ship wrong — a secondhand shopping tool that occasionally
+shows someone a $75 jacket when they said "under $50" has failed at the one
+job a price filter has. It's also a plain numeric comparison
+(`listing["price"] > max_price`) with no model involved, so unlike criterion
+1 there's no reason to leave slack. I tested 5 queries against 5 different
+ceilings (20, 25, 30, 35, 50) and checked every returned listing, not just
+the top one — 32 results total, 0 over their query's cap — and separately
+checked the boundary case (`max_price` set exactly equal to a real listing's
+price), which correctly included it, confirming "inclusive" in the spec is
+actually inclusive in the code.
 
 ---
 
