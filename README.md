@@ -402,20 +402,61 @@ this; none of mine did.
 **Happy path**
 
 ```
+$ python app.py ask 'vintage graphic tee under $30' --trace
 
+[1] search_listings (via MCP)
+      in:  dict with keys: description, size, max_price
+      out: 10 items: Y2K Baby Tee — Butterfly Print, Vintage Band Tee — Faded Grey, Graphic Tee — 2003 Tour Bootleg Style … +7 more
+[2] suggest_outfit
+      in:  dict with keys: item, wardrobe_items
+      out: Pair the butterfly baby tee with your baggy straight-leg dark wash jeans and chunky white sneakers for an effo…
+[3] create_fit_card
+      in:  dict with keys: item
+      out: Found this absolute gem on depop for only $18.0 and I am so obsessed with the little butterfly graphic. It's g…
+
+  Found:    Y2K Baby Tee — Butterfly Print — $18.0 on depop
+
+  Outfit:   Pair the butterfly baby tee with your baggy straight-leg dark wash jeans and chunky white sneakers for an effortless Y2K streetwear vibe. Layer the black cropped zip hoodie loosely over top and finish the look with your black crossbody bag.
+
+  Fit card: Found this absolute gem on depop for only $18.0 and I am so obsessed with the little butterfly graphic. It's giving major early 2000s mall rat energy, especially paired with some baggy dark denim. Can't wait to live in this all summer!
+
+2 model calls this session, 502 prompt + 106 output tokens
 ```
 
 **Empty search**
 
 ```
+$ python app.py ask 'designer ballgown size XXS under $5' --trace
 
+[1] search_listings (via MCP)
+      in:  dict with keys: description, size, max_price
+      out: [] (empty)
+[2] branch
+      →    search_results empty -> stopping before suggest_outfit
+
+  No listings matched 'designer ballgown' in size XXS and under $5. Try different keywords or a different size or a higher price ceiling.
+
+0 model calls this session
 ```
 
-**On the MCP move:** <!-- what changed in your code, and whether anything
-behaved differently afterwards. If the rewire didn't work, say exactly where it
-broke — the error text and the last thing that worked. That earns the point in
-full. -->
+Three steps vs. two — the empty-search path is visibly shorter because it
+stops before `suggest_outfit` and `create_fit_card` ever run, and makes
+zero model calls.
 
+**On the MCP move:** `search_listings` is now registered as an MCP tool in
+`mcp_server.py` with a typed, published description (inputs, units,
+matching rules, and the empty case spelled out for a reader who can't see
+`tools.py`). `agent.py::run_agent` no longer imports `search_listings`
+directly — it calls `mcp_client.call_tool("search_listings", {...})`,
+which starts the server over stdio, makes the call, and shuts it down
+again. The return shape did not change (still a `list[dict]` of the same
+listing records), which is the thing the spec says to check — I confirmed
+it by diffing the MCP-routed output against the direct-call output for the
+same query before trusting the swap. The only behavioral difference is
+latency: each `search_listings` call now starts a subprocess, so a run
+through MCP takes noticeably longer than the direct call did, which is the
+expected cost of the trade-off `mcp_client.py`'s docstring names
+("slower... and much easier to reason about").
 
 
 ---
