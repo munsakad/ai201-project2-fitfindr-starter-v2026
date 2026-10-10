@@ -537,9 +537,31 @@ run-to-run variance of fit-card length, not a result of the fix itself.
 
 ## What's Still Broken
 
-<!-- For each criterion still missed: what you'd do, and why you stopped where
-     you did. "I ran out of time" is fine if it's true. Pretending nothing is
-     left is not. -->
+No criterion is missed, so this is about what the fix doesn't cover rather
+than a graded miss.
+
+**The size regex is a tighter allowlist, not a real understanding of
+sizes.** It now rejects obvious non-sizes like "that," but it's still a
+fixed list of shapes (letter sizes, `S/M`-style combinations, 1-2 digit
+numbers, `W`+digits) matched against whatever word follows the literal
+word "size." A real size phrasing outside that list — "a petite," "runs
+big," or a shoe size written as "size 8 wide" — either gets rejected
+(falls back to no size filter, which fails safe) or could still be
+misparsed if it happens to match one of the allowed shapes. I stopped here
+because the allowlist covers every size format that actually appears in
+`data/listings.json`, which is what the agent needs to work correctly
+against this dataset; making it understand sizes in general is a different,
+larger problem (closer to the model-based parsing the spec explicitly
+says isn't needed for *this* dataset) and not what my diagnosis pointed at.
+
+**The MCP call starts a fresh server subprocess every time.** That's the
+documented, intentional trade-off in `mcp_client.py`, not a bug, but it
+means every query is slower than it was with a direct call, and that cost
+is paid on every single run, not just ones that need it — the same shape
+of trade-off as unit 3's `TOP_K` fix in the other project. I didn't treat
+this as something to fix, since the spec is explicit that a held-open
+connection is out of scope for one unit, but it's the honest cost of this
+unit's required move.
 
 
 
