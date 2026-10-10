@@ -35,18 +35,32 @@ SCENARIOS = [
         "wardrobe": "empty",
         "criterion": None,
     },
-    # TODO: add what your criteria 3, 4 and 5 need.
-    #
-    # Set "criterion" to the number in criteria.md that the scenario tests.
-    # "criterion": None means a diagnostic run — useful to have, but it isn't
-    # one of your five, and run_eval.py marks it as such in the table.
-    #
-    # For a state criterion, any normal query works — what you're checking is
-    # what ends up in the session, not what the user typed.
-    #
-    # For a fit-card criterion, you probably want the SAME query listed more
-    # than once, or several different items, depending on what your criterion
-    # actually says.
+    {
+        # Criterion 3 — state. Any matching query works; what's checked is
+        # whether selected_item is really the same dict search_results[0]
+        # returned, not whether the query is special.
+        "name": "state carries through to outfit and card",
+        "query": "90s track jacket in size M",
+        "wardrobe": "example",
+        "criterion": 3,
+    },
+    {
+        # Criterion 4 — the fit card. Same item, run five separate times
+        # (cache off), checking that the five captions vary and that each
+        # one still names the price and the platform.
+        "name": "fit card varies and stays grounded",
+        "query": "silk slip dress under $40",
+        "wardrobe": "example",
+        "criterion": 4,
+    },
+    {
+        # Criterion 5 — the price ceiling. One capped query, run five times;
+        # every returned listing has to be at or under max_price every time.
+        "name": "price ceiling respected",
+        "query": "vintage under $20",
+        "wardrobe": "example",
+        "criterion": 5,
+    },
 ]
 
 WARDROBES = ("example", "empty")
