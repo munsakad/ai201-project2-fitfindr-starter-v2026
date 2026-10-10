@@ -17,7 +17,8 @@ import re
 
 import config
 import trace
-from tools import search_listings, suggest_outfit, create_fit_card
+from mcp_client import call_tool, MCPError
+from tools import suggest_outfit, create_fit_card
 from generate import ModelUnavailable
 
 # ── query parsing ───────────────────────────────────────────────────────────
@@ -149,10 +150,27 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     parsed = parse_query(query)
     session["parsed"] = parsed
 
-    results = search_listings(
-        parsed["description"], size=parsed["size"], max_price=parsed["max_price"]
-    )
+    # search_listings runs behind MCP — the agent is a client now, not a
+    # direct caller. The arguments and the return shape are unchanged; only
+    # how the call gets there is different (see mcp_server.py, Milestone 1).
+    search_args = {
+        "description": parsed["description"],
+        "size": parsed["size"],
+        "max_price": parsed["max_price"],
+    }
+    try:
+        results = call_tool("search_listings", search_args)
+    except MCPError as exc:
+        trace.step("search_listings (via MCP)", inputs=search_args, returned=None,
+                   note="MCP call failed")
+        session["error"] = (
+            f"Couldn't reach the search tool over MCP: {exc}\n"
+            f"Check that mcp_server.py runs on its own: python mcp_server.py"
+        )
+        return session
+
     session["search_results"] = results
+    trace.step("search_listings (via MCP)", inputs=search_args, returned=results)
 
     # ⚠️ THE BRANCH. Nothing came back -> stop here, name what to change, and
     # never call suggest_outfit with an empty selection.
@@ -175,6 +193,7 @@ def run_agent(query: str, wardrobe: dict) -> dict:
             f"No listings matched '{described}'{where}. "
             f"Try {' or '.join(suggestions)}."
         )
+        trace.step("branch", note="search_results empty -> stopping before suggest_outfit")
         return session
 
     # Step 2: pick an item, suggest an outfit.
@@ -182,14 +201,39 @@ def run_agent(query: str, wardrobe: dict) -> dict:
     trace.check_iterations(iterations)
 
     session["selected_item"] = results[0]
-    session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+
+    try:
+        session["outfit_suggestion"] = suggest_outfit(session["selected_item"], wardrobe)
+    except ModelUnavailable as exc:
+        trace.step("suggest_outfit", inputs={"item": session["selected_item"].get("id")},
+                   returned=None, note="model unavailable")
+        session["error"] = f"Couldn't reach the styling model: {exc}"
+        return session
+
+    trace.step(
+        "suggest_outfit",
+        inputs={"item": session["selected_item"].get("id"), "wardrobe_items": len(wardrobe.get("items") or [])},
+        returned=session["outfit_suggestion"],
+    )
 
     # Step 3: write the caption.
     iterations += 1
     trace.check_iterations(iterations)
 
-    session["fit_card"] = create_fit_card(
-        session["outfit_suggestion"], session["selected_item"]
+    try:
+        session["fit_card"] = create_fit_card(
+            session["outfit_suggestion"], session["selected_item"]
+        )
+    except ModelUnavailable as exc:
+        trace.step("create_fit_card", inputs={"item": session["selected_item"].get("id")},
+                   returned=None, note="model unavailable")
+        session["error"] = f"Couldn't reach the captioning model: {exc}"
+        return session
+
+    trace.step(
+        "create_fit_card",
+        inputs={"item": session["selected_item"].get("id")},
+        returned=session["fit_card"],
     )
 
     return session
