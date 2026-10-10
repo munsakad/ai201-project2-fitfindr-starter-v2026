@@ -342,15 +342,48 @@ is inclusive as specified. 0 violations across 5 tries.
 
 | # | Criterion | Target | Verdict | How I decided |
 |---|---|---|---|---|
-| 1 |  |  |  |  |
-| 2 |  |  |  |  |
-| 3 |  |  |  |  |
-| 4 |  |  |  |  |
-| 5 |  |  |  |  |
+| 1 | Matching query completes all three tools | 4 of 5 | MET | 5/5. `vintage graphic tee under $30` produced a full fit card in all 5 real tries. |
+| 2 | Impossible query stops before tool 2 | 5 of 5 | MET | 5/5. `designer ballgown size XXS under $5` stopped at the branch every time, 0 model calls. |
+| 3 | Item search found reaches the next tools unchanged | 5 of 5 | MET | 5/5. All 5 tries selected the same item (`90s Track Jacket`, id `lst_004`) and every outfit/fit card discussed that exact item, never a different one. |
+| 4 | Fit card varies, never drops price/platform | 5 of 5 | MET | 5/5 on both halves. 5 real calls on the same item produced 5 different opening sentences, and every card named the $30 price and Depop at least once. |
+| 5 | Price ceiling never violated | 5 of 5 | MET | 5/5. Checked all 7 returned listings each try, not just the top one — 0 over the $20 cap in any try, all 5 identical since `search_listings` has no randomness. |
 
 **Diagnoses**
 
+I missed nothing against my own five criteria. That's the signal the
+milestone warns about — a target that's cleared with this much room
+(0/50 real tries failed) is more likely a safe target than an excellent
+agent, so before calling this unit done I went looking for a question my
+five scenarios don't ask.
 
+I found one, in `agent.py::parse_query` — the regex-based query parser,
+not one of the three tools. The size pattern was originally
+`\bsize\s+([A-Za-z0-9.]+)\b`: whatever single word follows the literal word
+"size" gets treated as the requested size, no matter what that word is.
+`"90s track jacket in size M"` works fine. But a completely ordinary
+phrasing — **`"low-rise cargo pants in a size that fits loose"`** — parses
+`size` as `"that"`, because "that" is the word right after "size" and the
+old pattern didn't check whether it looked like an actual size. That gets
+passed to `search_listings` as `size="that"`, which matches no listing's
+size tokens, so the agent reported **"No listings matched... in size
+that"** for a query the data can clearly answer (`lst_011`, Low-Rise Cargo
+Pants, `W29`, exists and should have been found).
+
+**Where this sits in the four places things can go wrong:** not a tool —
+`search_listings` did exactly what it promises with the input it was
+given. Not the branch — the branch correctly stopped on an empty list; the
+list was wrong, not the branch's response to it. Not the session or the
+model. It's upstream of all four: the query-parsing step that feeds the
+first tool made an assumption (the word after "size" is always a size)
+that was never tested against ordinary conversational phrasing, only
+against the clean "size M" / "size 8" style of my own five scenarios and
+the starter's own example queries.
+
+That's the pattern worth naming honestly: every one of my scenarios writes
+"size" immediately followed by an actual size token, because I wrote them
+to test the agent's branches and tools, not to adversarially test my own
+parser. A criterion written to probe the parser itself would have caught
+this; none of mine did.
 
 ---
 
