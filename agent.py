@@ -29,7 +29,15 @@ from generate import ModelUnavailable
 # call (and the rate-limit budget that comes with it) to parse something this
 # mechanical would be solving the wrong problem.
 
-_SIZE_RE = re.compile(r"\bsize\s+([A-Za-z0-9.]+)\b", re.IGNORECASE)
+_SIZE_RE = re.compile(
+    r"\bsize\s+("
+    r"XX?S|XX?L|S/M|M/L|L/XL"   # letter combinations, checked before single letters
+    r"|[SML]"                   # single-letter sizes
+    r"|\d{1,2}(?:\.\d)?"        # numeric sizes: 7, 8, 8.5
+    r"|W\d{2}"                  # waist sizes: W28
+    r")\b",
+    re.IGNORECASE,
+)
 _PRICE_RE = re.compile(r"under\s*\$?\s*(\d+(?:\.\d+)?)", re.IGNORECASE)
 
 

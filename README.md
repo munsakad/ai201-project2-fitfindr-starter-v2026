@@ -468,25 +468,69 @@ expected cost of the trade-off `mcp_client.py`'s docstring names
 
      `python run_eval.py --label after` -->
 
-**What I changed:**
+**What I changed:** `agent.py::parse_query`'s `_SIZE_RE`. Before:
+`\bsize\s+([A-Za-z0-9.]+)\b` — any single word after "size" becomes the
+size filter. After: the captured group is restricted to an explicit list of
+shapes that actually look like sizes — `XS/S/M/L/XL` and their doubled
+forms, the slash combinations in the data (`S/M`, `M/L`, `L/XL`), a bare
+1-2 digit number with an optional decimal (`7`, `8`, `8.5`), or a waist
+size (`W28`). Nothing else. Everything downstream (`search_listings`,
+`suggest_outfit`, `create_fit_card`, the MCP registration) is unchanged.
 
-**Which failure it was meant to fix:**
+**Which failure it was meant to fix:** The parsing bug from Diagnoses —
+`"a size that fits loose"` capturing `"that"` as the size and wrongly
+emptying out a real match.
 
 ### Run Log — After
 
+Produced the same way, `python run_eval.py --label after`, full transcript
+in [`results/run_2026-10-10_1204_after.md`](results/run_2026-10-10_1204_after.md).
+51 model calls, cache off.
+
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before tool 2 | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. Item search found reaches the next tools unchanged | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. Fit card varies, never drops price/platform | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. Price ceiling never violated | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
 
-**Did it help, and how do I know:**
+Identical to the before table — none of my five scenarios ever exercised
+the broken regex path (they all write "size" immediately followed by a
+real size token), so this run log can't show the fix. The real evidence is
+the scenario the criteria never asked for:
 
-<!-- If it made things worse, say that. Honestly reported, that earns full
-     credit and is more interesting than one that worked. -->
+```
+Query: "low-rise cargo pants in a size that fits loose"
 
+Before: parsed as {'description': 'low-rise cargo pants in a fits loose', 'size': 'that', 'max_price': None}
+        -> 0 results -> "No listings matched 'low-rise cargo pants in a fits loose' in size that."
+        (WRONG — lst_011, Low-Rise Cargo Pants, W29, exists and matches)
+
+After:  parsed as {'description': 'low-rise cargo pants in a size that fits loose', 'size': None, 'max_price': None}
+        -> 10 results, top match: Low-Rise Cargo Pants — Khaki ($27.0, poshmark)
+        -> real outfit suggestion and fit card produced
+        (CORRECT)
+```
+
+**Did it help, and how do I know:** Yes, for the failure it targeted —
+confirmed by the before/after pair above, which I re-ran after the change
+rather than assumed. I also reran every size-bearing query used elsewhere
+in this README (`size M`, `size 8`, `size W28`, `size XXS`) to check the
+tighter pattern didn't narrow things too far — all four still parse their
+size correctly:
+
+```
+'90s track jacket in size M'              -> size: 'M'
+'platform sneakers size 8'                -> size: '8'
+'70s corduroy pants in size W28'          -> size: 'W28'
+'designer ballgown size XXS under $5'     -> size: 'XXS'
+```
+
+Cost-wise this change is free: it touches only the parsing regex, makes no
+additional model calls, and the before/after token totals (12,054 vs
+12,095 prompt+output tokens across 50-51 calls) are within the normal
+run-to-run variance of fit-card length, not a result of the fix itself.
 
 
 ---
