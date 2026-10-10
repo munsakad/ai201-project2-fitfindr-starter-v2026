@@ -246,6 +246,28 @@ Score these vintage Levi's 501 jeans on Depop for just $38.0 and honestly they f
   criterion 4 around the real (non-cached) behavior rather than what three
   identical cached strings would have suggested.
 
+**Moment 3 (unit 4)** — All five criteria passed cleanly on the first
+`run_eval.py --label before` run, so I asked Claude to help find a failure
+my five scenarios wouldn't catch, since the milestone explicitly warns that
+a clean sweep usually means safe targets rather than an excellent agent. It
+proposed testing an ordinary conversational size phrasing ("a size that
+fits loose") on the theory that the regex-based parser might assume the
+word right after "size" is always a real size value. That theory was
+right — it broke a real, findable match. I verified the failure myself
+(parsed the query, then separately confirmed by hand that `lst_011` really
+does match on keywords and price) before accepting it as a genuine bug
+rather than an edge case not worth fixing.
+
+**Moment 4 (unit 4)** — Before accepting the regex fix, I asked what the
+allowlist approach might still miss. It named two things: phrasings outside
+the allowed shapes (e.g. "petite," "runs big") and the fact that the fix
+is specific to this dataset's actual size vocabulary rather than a general
+solution. Both are in What's Still Broken because I checked them against
+`data/listings.json` myself and agreed they were real gaps, not because
+they were handed to me — I decided the first was acceptable (fails open to
+no size filter, which is safe) and the second was out of scope for a
+one-line fix tied to a specific diagnosis.
+
 <!-- ═══════════════════════ UNIT 4 — THE TEST ═══════════════════════
 
      Don't fill these in during unit 3.
@@ -255,29 +277,48 @@ Score these vintage Levi's 501 jeans on Depop for just $38.0 and honestly they f
 
 ## Run Log — Before
 
-<!-- Five criteria, five tries each, in this exact format.
-
-     Five, because your criteria are written out of five. Mark each try PASS
-     or FAIL, count the passes, and read that count against your target — a
-     row targeting 4 of 5 with three PASS cells is MISSED (3/5).
-
-     `python run_eval.py --label before` runs everything and writes the table
-     into results/. Paste it here and fill in the verdicts. -->
+Produced by `python run_eval.py --label before` (`agent.py::run_agent`,
+scenarios in `scenarios.py`), full transcript in
+[`results/run_2026-10-10_1158_before.md`](results/run_2026-10-10_1158_before.md).
+50 real model calls, cache off. Each row is one scenario from `scenarios.py`,
+run 5 separate times.
 
 | Criterion | Target | Try 1 | Try 2 | Try 3 | Try 4 | Try 5 | Verdict |
 |---|---|---|---|---|---|---|---|
-| 1.  |  |  |  |  |  |  |  |
-| 2.  |  |  |  |  |  |  |  |
-| 3.  |  |  |  |  |  |  |  |
-| 4.  |  |  |  |  |  |  |  |
-| 5.  |  |  |  |  |  |  |  |
+| 1. Matching query completes all three tools | 4 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 2. Impossible query stops before tool 2 | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 3. Item search found reaches the next tools unchanged | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 4. Fit card varies, never drops price/platform | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
+| 5. Price ceiling never violated | 5 of 5 | PASS | PASS | PASS | PASS | PASS | MET (5/5) |
 
-**Real output from one try**, pasted as text, naming the file and function
-that produced it:
+**Real output from one try**, criterion 3 (`agent.py::run_agent`, state
+flowing into `tools.py::suggest_outfit` / `tools.py::create_fit_card`),
+query `90s track jacket in size M`, try 1:
 
 ```
+- selected_item: 90s Track Jacket — Navy/White Stripe ($45.0, poshmark)
+- search_results: 4
+
+Fit card:
+Scored this crispy navy and white 90s track jacket on Poshmark for just $45 and I'm obsessed with the retro athletic energy. Going straight into heavy rotation with baggy denim and chunky sneakers for the ultimate off-duty look. Best thrift win all week!
+```
+
+Same item (`90s Track Jacket`, $45, poshmark) named correctly in all 5
+tries — the fit card never drifted to a different listing than the one
+`search_results[0]` actually returned.
+
+**Real output**, criterion 5 (`tools.py::search_listings`, called via MCP),
+query `vintage under $20`, all 7 results across all 5 tries:
 
 ```
+Leather Belt — Brown, Braided ($12.0), Bucket Hat — Reversible, Brown Plaid ($14.0),
+Henley Long Sleeve — Washed Burgundy ($16.0), Y2K Baby Tee — Butterfly Print ($18.0),
+Vintage Polo Shirt — Forest Green ($18.0), Vintage Band Tee — Faded Grey ($19.0),
+Oversized Crewneck Sweatshirt — Vintage Navy ($20.0)
+```
+
+All 7 at or under $20 — including the $20.00 item, confirming `max_price`
+is inclusive as specified. 0 violations across 5 tries.
 
 ---
 
